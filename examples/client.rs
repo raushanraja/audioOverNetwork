@@ -1,5 +1,7 @@
+use audiopus::SampleRate;
+use audiopus::{coder::Decoder, Channels};
+use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
-use std::io::Cursor;
 use std::net::UdpSocket;
 
 fn main() {
@@ -9,17 +11,20 @@ fn main() {
 
     println!("Receiving audio...");
 
+    let mut decoder = Decoder::new(SampleRate::Hz48000, Channels::Auto).unwrap();
+
     let mut buffer = [0u8; 4096]; // Buffer to receive audio packets
+    let mut pcm_buffer = [0f32; 1920];
     loop {
         let (size, _src) = socket
             .recv_from(&mut buffer)
             .expect("Failed to receive data");
-        let audio_data = buffer[..size].to_vec();
 
-        // Convert audio data to a format compatible with `rodio`
-        let audio_cursor = Cursor::new(audio_data);
-        let source = rodio::Decoder::new(audio_cursor).unwrap();
+        let samples = decoder
+            .decode_float(Some(&buffer[..size]), &mut pcm_buffer[..], false)
+            .unwrap();
 
+        let source = SamplesBuffer::new(2, 48000, &pcm_buffer[..samples]);
         sink.append(source);
     }
 }

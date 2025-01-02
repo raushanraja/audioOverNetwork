@@ -1,3 +1,4 @@
+use audiopus::{coder::Encoder, Application, SampleRate};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::net::UdpSocket;
 
@@ -9,16 +10,26 @@ fn main() {
     let config = device.default_input_config().unwrap();
 
     let socket = UdpSocket::bind("0.0.0.0:12345").expect("Failed to bind socket");
-    let target_address = "127.0.0.1:12346"; // Replace with the receiver's address
+    let target_address = "192.168.0.114:12346"; // Replace with the receiver's address
+
+    // Setup Opus encoder
+    let encoder = Encoder::new(
+        SampleRate::Hz48000,
+        audiopus::Channels::Auto,
+        Application::Audio,
+    )
+    .expect("Failed to create encoder");
 
     let stream = device
         .build_input_stream(
             &config.into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 // Serialize and send captured audio data over UDP
-                let bytes = bytemuck::cast_slice(data); // Convert f32 slice to byte slice
+                //
+                let mut output = [0u8; 4096];
+                let len = encoder.encode_float(data, &mut output).unwrap();
                 socket
-                    .send_to(bytes, target_address)
+                    .send_to(&output[..len], target_address)
                     .expect("Failed to send data");
             },
             move |err| eprintln!("Stream error: {}", err),

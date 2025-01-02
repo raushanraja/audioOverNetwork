@@ -52,6 +52,7 @@ dependencies = [
 name = "aprocess"
 version = "0.1.0"
 dependencies = [
+ "audiopus",
  "bytemuck",
  "cpal",
  "rodio",
@@ -65,6 +66,25 @@ name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+
+[[package]]
+name = "audiopus"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3743519567e9135cf6f9f1a509851cb0c8e4cb9d66feb286668afb1923bec458"
+dependencies = [
+ "audiopus_sys",
+]
+
+[[package]]
+name = "audiopus_sys"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "927791de46f70facea982dbfaf19719a41ce6064443403be631a85de6a58fff9"
+dependencies = [
+ "log",
+ "pkg-config",
+]
 
 [[package]]
 name = "autocfg"
