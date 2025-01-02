@@ -52,9 +52,9 @@ dependencies = [
 name = "aprocess"
 version = "0.1.0"
 dependencies = [
- "audiopus",
  "bytemuck",
  "cpal",
+ "opus",
  "rodio",
  "tokio",
  "tokio-tungstenite",
@@ -68,20 +68,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
-name = "audiopus"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3743519567e9135cf6f9f1a509851cb0c8e4cb9d66feb286668afb1923bec458"
-dependencies = [
- "audiopus_sys",
-]
-
-[[package]]
 name = "audiopus_sys"
-version = "0.1.8"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "927791de46f70facea982dbfaf19719a41ce6064443403be631a85de6a58fff9"
+checksum = "62314a1546a2064e033665d658e88c620a62904be945f8147e6b16c3db9f8651"
 dependencies = [
+ "cmake",
  "log",
  "pkg-config",
 ]
@@ -218,6 +210,15 @@ name = "claxon"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
+
+[[package]]
+name = "cmake"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c682c223677e0e5b6b7f63a64b9351844c3f1b1678a68b7ee617e30fb082620e"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "combine"
@@ -722,6 +723,16 @@ name = "once_cell"
 version = "1.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1261fe7e33c73b354eab43b1273a57c8f967d0391e80353e51f764ac02cf6775"
+
+[[package]]
+name = "opus"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6526409b274a7e98e55ff59d96aafd38e6cd34d46b7dbbc32ce126dffcd75e8e"
+dependencies = [
+ "audiopus_sys",
+ "libc",
+]
 
 [[package]]
 name = "parking_lot"

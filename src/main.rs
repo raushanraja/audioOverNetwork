@@ -1,125 +1,95 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::time::Duration;
-use std::{net::SocketAddr, thread};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
-use tokio::{net::TcpListener, task, time::sleep};
-use tokio_tungstenite::accept_async;
-use tokio_tungstenite::tungstenite::protocol::Message;
-use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use std::collections::btree_map::Keys;
 
-fn input(tx: &mpsc::UnboundedSender<Vec<f32>>) {
-    let host = cpal::default_host();
-    let devices = host.input_devices();
+use cpal::SampleRate;
 
-    if let Ok(devices) = devices {
-        if let Some(device) = devices
-            .into_iter()
-            .filter(|x| x.name().unwrap().contains("pulse"))
-            .next()
-        {
-            println!("Default input device: {}", device.name().unwrap());
-            let config = device.default_input_config().unwrap();
-            let tsx = tx.clone();
+fn encode_audio(data: &[f32]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let sample_rate = 48000;
+    let channels = opus::Channels::Stereo;
+    let application = opus::Application::Audio;
+    let bitrate = opus::Bitrate::Bits(24000);
 
-            let stream = device
-                .build_input_stream(
-                    &config.into(),
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        if let Err(e) = tsx.send(data.to_vec()) {
-                            eprintln!("Failed to send data: {:?}", e);
-                        }
-                    },
-                    move |err| eprintln!("Stream error: {}", err),
-                    None,
-                )
-                .unwrap();
-            stream.play().unwrap();
-            thread::sleep(Duration::from_secs(60 * 60 * 24));
-            println!("Stream is playing");
+    let mut encoder = opus::Encoder::new(sample_rate, channels, application)?;
+    encoder.set_bitrate(bitrate)?;
+
+    let frame_size = (sample_rate as i32 / 1000 * 200) as usize;
+
+    let mut output = vec![0u8; 4096];
+    let mut smaples_i = 0;
+    let mut output_i = 0;
+    let mut end_buffer = vec![0f32; frame_size];
+
+    println!("Data length: {:?}", data.len());
+    println!("Output length: {:?}", output.len());
+
+    // // Store Number of samples
+    {
+        let samples: u32 = data.len().try_into()?;
+        let bytes = samples.to_be_bytes();
+        println!("Number of samples: {:?}, {:?}", samples, &bytes[..4]);
+        if output.len() >= output_i + 4 {
+            output[output_i..output_i + 4].copy_from_slice(&bytes);
         } else {
-            println!("No suitable input device found");
+            // Handle the error, e.g., log a message or resize the output buffer
+            eprintln!("Output buffer is too small for the copy operation");
         }
-    } else {
-        println!("Failed to get input devices");
+        output_i += 4;
+    }
+    while smaples_i < data.len() {
+        let buff = if smaples_i + frame_size < data.len() {
+            &data[smaples_i..smaples_i + frame_size]
+        } else {
+            let end = data.len() - smaples_i;
+            end_buffer[..end].copy_from_slice(&data[smaples_i..]);
+            &end_buffer
+        };
+
+        match encoder.encode_vec_float(&buff, 4096) {
+            Ok(result) => {
+                output[output_i..output_i + result.len()].copy_from_slice(&result);
+                output_i += result.len();
+                smaples_i += frame_size;
+            }
+            Err(e) => {
+                eprintln!("Failed to encode audio data {:?}", e);
+                match e.code() {
+                    opus::ErrorCode::BufferTooSmall => {}
+                    _ => return Err(Box::new(e)),
+                }
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+fn main() {
+    let mut data = [0.0f32; 48000];
+
+    data[0] = 1.0;
+    data[1] = 1.0;
+    data[2] = 1.0;
+    data[3] = 1.0;
+
+    let result = encode_audio(&data);
+
+    println!("{:?}", result);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_audio() {
+        let mut data = [0.0f32; 48000];
+
+        data[0] = 1.0;
+        data[1] = 1.0;
+        data[2] = 1.0;
+        data[3] = 1.0;
+
+        let result = encode_audio(&data);
+        assert!(result.is_ok());
     }
 }
 
-async fn handle_connection(
-    raw_stream: tokio::net::TcpStream,
-    mut rx: mpsc::UnboundedReceiver<Vec<f32>>,
-) {
-    let mut ws_stream = accept_async(raw_stream)
-        .await
-        .expect("Error during the websocket handshake occurred");
-
-    tokio::spawn(async move {
-        while let Some(sample) = rx.recv().await {
-            let msg = Message::binary(String::from("Hello"));
-            ws_stream
-                .get_mut()
-                .split()
-                .1
-                .write_all(&msg.into_data())
-                .await
-                .unwrap();
-        }
-    })
-    .await
-    .unwrap();
-}
-
-async fn process_request(req: &Request, res: Response) -> Result<Response, ErrorResponse> {
-    println!("Processing request: {:?}", req);
-
-    let headers = req.headers();
-    let protocol = headers
-        .get("Sec-WebSocket-Protocol")
-        .map(|v| v.to_str().unwrap())
-        .unwrap_or("unknown");
-
-    let username = headers
-        .get("Sec-WebSocket-Username")
-        .map(|v| v.to_str().unwrap())
-        .unwrap_or("unknown");
-
-    let password = headers
-        .get("Sec-WebSocket-Password")
-        .map(|v| v.to_str().unwrap())
-        .unwrap_or("unknown");
-
-    println!(
-        "Protocol: {}, Username: {}, Password: {}",
-        protocol, username, password
-    );
-
-    Ok(res)
-}
-
-#[tokio::main]
-async fn main() {
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<f32>>();
-    tokio::spawn(async move { input(&tx) });
-
-    let server_connection_handler = tokio::spawn(async move {
-        let listener = match TcpListener::bind("0.0.0.0:8181").await {
-            Ok(listener) => listener,
-            Err(e) => {
-                eprintln!("Failed to bind to address: {}", e);
-                return;
-            }
-        };
-
-        while let Ok((stream, _)) = listener.accept().await {
-            match tokio_tungstenite::accept_hdr_async(stream, process_request).await {
-                Ok(connection) => {
-                    let join_handle = handle_connection(tx, connection);
-                    tokio::spawn(join_handle);
-                }
-                Err(e) => {
-                    eprintln!("Failed to accept connection: {}", e);
-                }
-            }
-        }
-    });
-}
