@@ -10,10 +10,6 @@ fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let mut output = Vec::new();
     let mut input_i = 0;
 
-    // Read the number of samples
-    let num_samples = u32::from_be_bytes(data[input_i..input_i + 4].try_into()?) as usize;
-    input_i += 4;
-
     let frame_size = (sample_rate as i32 / 1000 * 20) as usize;
 
     while input_i < data.len() {
@@ -31,8 +27,6 @@ fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         }
     }
 
-    // Trim the output buffer to the actual size
-    output.truncate(num_samples);
     Ok(output)
 }
 fn main() {

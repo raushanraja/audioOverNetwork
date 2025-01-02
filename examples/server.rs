@@ -4,51 +4,45 @@ use std::net::UdpSocket;
 fn encode_audio(data: &[f32]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let sample_rate = 48000;
     let channels = opus::Channels::Stereo;
-    let application = opus::Application::Audio;
-    let bitrate = opus::Bitrate::Bits(24000);
+    let application = opus::Application::LowDelay;
+    let bitrate = opus::Bitrate::Bits(48000);
 
     let mut encoder = opus::Encoder::new(sample_rate, channels, application)?;
     encoder.set_bitrate(bitrate)?;
 
-    let frame_size = (sample_rate as i32 / 1000 * 20) as usize;
+    let frame_rate_ms = 20;
+    let frame_rate = 1000 / frame_rate_ms;
+    let frame_size = (sample_rate as i32 / frame_rate) as usize;
 
-    let mut output = vec![0u8; 4096];
-    let mut smaples_i = 0;
+    let mut output = vec![0u8; 48000];
+    let mut samples_i = 0;
     let mut output_i = 0;
     let mut end_buffer = vec![0f32; frame_size];
 
-    // // Store Number of samples
-    {
-        let samples: u32 = data.len().try_into()?;
-        let bytes = samples.to_be_bytes();
-        // println!("Number of samples: {:?}, {:?}", samples, &bytes[..4]);
-        if output.len() >= output_i + 4 {
-            output[output_i..output_i + 4].copy_from_slice(&bytes);
+    while samples_i < data.len() {
+        let buff = if samples_i + frame_size < data.len() {
+            &data[samples_i..samples_i + frame_size]
         } else {
-            // Handle the error, e.g., log a message or resize the output buffer
-            eprintln!("Output buffer is too small for the copy operation");
-        }
-        output_i += 4;
-    }
-    while smaples_i < data.len() {
-        let buff = if smaples_i + frame_size < data.len() {
-            &data[smaples_i..smaples_i + frame_size]
-        } else {
-            let end = data.len() - smaples_i;
-            end_buffer[..end].copy_from_slice(&data[smaples_i..]);
+            let end = data.len() - samples_i;
+            end_buffer[..end].copy_from_slice(&data[samples_i..]);
             &end_buffer
         };
 
         match encoder.encode_vec_float(&buff, 4096) {
             Ok(result) => {
+                if output_i + result.len() > output.len() {
+                    output.resize(output_i + result.len(), 0);
+                }
                 output[output_i..output_i + result.len()].copy_from_slice(&result);
                 output_i += result.len();
-                smaples_i += frame_size;
+                samples_i += frame_size;
             }
             Err(e) => {
                 eprintln!("Failed to encode audio data {:?}", e);
                 match e.code() {
-                    opus::ErrorCode::BufferTooSmall => {}
+                    opus::ErrorCode::BufferTooSmall => {
+                        eprintln!("Output buffer is too small for the copy operation");
+                    }
                     _ => return Err(Box::new(e)),
                 }
             }
@@ -59,7 +53,6 @@ fn encode_audio(data: &[f32]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     output.truncate(output_i);
     Ok(output)
 }
-
 fn main() {
     let host = cpal::default_host();
     let device = host
@@ -67,9 +60,14 @@ fn main() {
         .expect("No input device available");
     let config = device.default_input_config().unwrap();
 
+    println!(
+        "Default input device: {}",
+        device.name().unwrap_or("Unknown".to_string())
+    );
+
     let socket = UdpSocket::bind("0.0.0.0:12345").expect("Failed to bind socket");
-    // let target_address = "192.168.0.114:12346"; // Replace with the receiver's address
-    let target_address = "0.0.0.0:12346"; // Replace with the receiver's address
+    let target_address = "192.168.0.114:12346"; // Replace with the receiver's address
+                                                // let target_address = "0.0.0.0:12346"; // Replace with the receiver's address
 
     let stream = device
         .build_input_stream(
