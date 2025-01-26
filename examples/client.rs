@@ -1,6 +1,6 @@
 use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
-use std::net::UdpSocket;
+use tokio::net::UdpSocket;
 
 fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let sample_rate = 48000;
@@ -10,7 +10,7 @@ fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let mut output = Vec::new();
     let mut input_i = 0;
 
-    let frame_size = (sample_rate as i32 / 1000 * 20) as usize;
+    let frame_size = (sample_rate as i32 / 1000 * 10) as usize; // Adjust frame size to 10ms
 
     while input_i < data.len() {
         let packet = &data[input_i..];
@@ -29,18 +29,19 @@ fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
 
     Ok(output)
 }
-fn main() {
-    let socket = UdpSocket::bind("0.0.0.0:12346").expect("Failed to bind socket");
+
+#[tokio::main]
+async fn main() {
+    let socket = UdpSocket::bind("0.0.0.0:12346").await.expect("Failed to bind socket");
     let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
     let sink = Sink::try_new(&stream_handle).unwrap();
 
     println!("Receiving audio...");
 
-    let mut buffer = [0u8; 4096]; // Buffer to receive audio packets
+    let mut buffer = [0u8; 65536]; // Increase buffer size
+
     loop {
-        let (size, _src) = socket
-            .recv_from(&mut buffer)
-            .expect("Failed to receive data");
+        let (size, _src) = socket.recv_from(&mut buffer).await.expect("Failed to receive data");
 
         let samples = match decode_audio(&buffer[..size]) {
             Ok(samples) => samples,
