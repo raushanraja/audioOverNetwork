@@ -5,9 +5,9 @@ use tokio::net::TcpListener;
 
 fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let mut output = Vec::new();
-    for chunk in data.chunks(4) {
-        let mut bytes = [0u8; 4];
-        bytes.copy_from_slice(chunk);
+    let mut bytes = [0u8; 4];
+    for i in 0..(data.len() / 4) {
+        bytes.copy_from_slice(&data[i * 4..(i + 1) * 4]);
         let sample = f32::from_le_bytes(bytes);
         output.push(sample);
     }
@@ -41,8 +41,11 @@ async fn main() {
                 .accept()
                 .await
                 .expect("Failed to accept connection");
-            let mut buffer = vec![0u8; 65536]; // Increase buffer size
-            let size = socket.read(&mut buffer).await.expect("Failed to read data");
+            let mut buffer: Vec<u8> = vec![];
+            let size = socket
+                .read_to_end(&mut buffer)
+                .await
+                .expect("Failed to read data");
             match decode_audio(&buffer[..size]) {
                 Ok(samples) => {
                     println!("Received {} samples", samples.len());

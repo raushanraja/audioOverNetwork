@@ -24,26 +24,32 @@ async fn main() {
         config
     );
 
-    // let target_address = "192.168.0.163:12346"; // Replace with the receiver's address
-    let target_address = "0.0.0.0:12346"; // Replace with the receiver's address
+    let target_address = "192.168.0.163:12346"; // Replace with the receiver's address
+                                                // let target_address = "0.0.0.0:12346"; // Replace with the receiver's address
 
     let (tx, rx) = std::sync::mpsc::channel::<Vec<f32>>();
+    let sample_rate = config.sample_rate().0 as usize;
+    let channels = config.channels() as usize;
+    let buffer_size = sample_rate * channels * 2; // 2 seconds of audio
+    let mut buffer = Vec::with_capacity(buffer_size);
 
     tokio::spawn(async move {
         while let Ok(data) = rx.recv() {
-            // println!("sending {} samples", data.len());
-            match encode_audio(&data) {
-                Ok(encoded) => match TcpStream::connect(&target_address).await {
-                    Ok(mut stream) => {
-                        if let Err(e) = stream.write_all(&encoded).await {
-                            eprintln!("Failed to send data: {:?}", e);
-                        } else {
-                            // println!("Sent {} bytes to {}", encoded.len(), target_address);
+            buffer.extend(data);
+            if buffer.len() >= buffer_size {
+                match encode_audio(&buffer) {
+                    Ok(encoded) => match TcpStream::connect(&target_address).await {
+                        Ok(mut stream) => {
+                            println!("Sending data {:?}, bytes:{:?}", buffer.len(), encoded.len());
+                            if let Err(e) = stream.write_all(&encoded).await {
+                                eprintln!("Failed to send data: {:?}", e);
+                            }
                         }
-                    }
-                    Err(e) => eprintln!("Failed to connect to {}: {:?}", target_address, e),
-                },
-                Err(e) => eprintln!("Failed to encode audio data {:?}", e),
+                        Err(e) => eprintln!("Failed to connect to {}: {:?}", target_address, e),
+                    },
+                    Err(e) => eprintln!("Failed to encode audio data {:?}", e),
+                }
+                buffer.clear();
             }
         }
     });
@@ -53,9 +59,10 @@ async fn main() {
             &config.into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 let data = data.to_vec();
-                if let Err(e) = tx.send(data) {
-                    eprintln!("Failed to send data to channel: {:?}", e);
-                }
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    tx.send(data).unwrap();
+                });
             },
             move |err| eprintln!("An error occurred on the input stream: {}", err),
             None,
@@ -64,5 +71,5 @@ async fn main() {
 
     stream.play().unwrap();
     println!("Streaming audio to {}", target_address);
-    tokio::time::sleep(tokio::time::Duration::from_secs(60)).await; // Stream for 60 seconds
+    tokio::time::sleep(tokio::time::Duration::from_secs(1000)).await; // Stream for 5 seconds
 }
