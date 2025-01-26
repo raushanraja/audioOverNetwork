@@ -30,26 +30,39 @@ async fn main() {
     let (tx, rx) = std::sync::mpsc::channel::<Vec<f32>>();
     let sample_rate = config.sample_rate().0 as usize;
     let channels = config.channels() as usize;
-    let buffer_size = sample_rate * channels * 2; // 2 seconds of audio
+    let buffer_size = 20; // 2 seconds of audio
     let mut buffer = Vec::with_capacity(buffer_size);
 
     tokio::spawn(async move {
-        while let Ok(data) = rx.recv() {
-            buffer.extend(data);
-            if buffer.len() >= buffer_size {
-                match encode_audio(&buffer) {
-                    Ok(encoded) => match TcpStream::connect(&target_address).await {
-                        Ok(mut stream) => {
-                            println!("Sending data {:?}, bytes:{:?}", buffer.len(), encoded.len());
-                            if let Err(e) = stream.write_all(&encoded).await {
-                                eprintln!("Failed to send data: {:?}", e);
+        loop {
+            match TcpStream::connect(&target_address).await {
+                Ok(mut stream) => {
+                    println!("Connected to {}", target_address);
+                    while let Ok(data) = rx.recv() {
+                        buffer.extend(data);
+                        if buffer.len() >= buffer_size {
+                            match encode_audio(&buffer) {
+                                Ok(encoded) => {
+                                    println!(
+                                        "Sending data {:?}, bytes:{:?}",
+                                        buffer.len(),
+                                        encoded.len()
+                                    );
+                                    if let Err(e) = stream.write_all(&encoded).await {
+                                        eprintln!("Failed to send data: {:?}", e);
+                                        break;
+                                    }
+                                }
+                                Err(e) => eprintln!("Failed to encode audio data {:?}", e),
                             }
+                            buffer.clear();
                         }
-                        Err(e) => eprintln!("Failed to connect to {}: {:?}", target_address, e),
-                    },
-                    Err(e) => eprintln!("Failed to encode audio data {:?}", e),
+                    }
                 }
-                buffer.clear();
+                Err(e) => {
+                    eprintln!("Failed to connect to {}: {:?}", target_address, e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                }
             }
         }
     });
@@ -60,7 +73,7 @@ async fn main() {
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 let data = data.to_vec();
                 let tx = tx.clone();
-                tokio::spawn(async move {
+                std::thread::spawn(move || {
                     tx.send(data).unwrap();
                 });
             },

@@ -1,95 +1,71 @@
-use std::collections::btree_map::Keys;
+use aprocess::ws;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use tokio::sync::mpsc;
 
-use cpal::SampleRate;
-
-fn encode_audio(data: &[f32]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let sample_rate = 48000;
-    let channels = opus::Channels::Stereo;
-    let application = opus::Application::Audio;
-    let bitrate = opus::Bitrate::Bits(24000);
-
-    let mut encoder = opus::Encoder::new(sample_rate, channels, application)?;
-    encoder.set_bitrate(bitrate)?;
-
-    let frame_size = (sample_rate as i32 / 1000 * 200) as usize;
-
-    let mut output = vec![0u8; 4096];
-    let mut smaples_i = 0;
-    let mut output_i = 0;
-    let mut end_buffer = vec![0f32; frame_size];
-
-    println!("Data length: {:?}", data.len());
-    println!("Output length: {:?}", output.len());
-
-    // // Store Number of samples
-    {
-        let samples: u32 = data.len().try_into()?;
-        let bytes = samples.to_be_bytes();
-        println!("Number of samples: {:?}, {:?}", samples, &bytes[..4]);
-        if output.len() >= output_i + 4 {
-            output[output_i..output_i + 4].copy_from_slice(&bytes);
-        } else {
-            // Handle the error, e.g., log a message or resize the output buffer
-            eprintln!("Output buffer is too small for the copy operation");
-        }
-        output_i += 4;
+fn encode_audio(data: &[f32]) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut encoded = Vec::new();
+    for sample in data {
+        let sample = sample.to_le_bytes();
+        encoded.extend_from_slice(&sample);
     }
-    while smaples_i < data.len() {
-        let buff = if smaples_i + frame_size < data.len() {
-            &data[smaples_i..smaples_i + frame_size]
-        } else {
-            let end = data.len() - smaples_i;
-            end_buffer[..end].copy_from_slice(&data[smaples_i..]);
-            &end_buffer
-        };
+    Ok(encoded)
+}
 
-        match encoder.encode_vec_float(&buff, 4096) {
-            Ok(result) => {
-                output[output_i..output_i + result.len()].copy_from_slice(&result);
-                output_i += result.len();
-                smaples_i += frame_size;
-            }
-            Err(e) => {
-                eprintln!("Failed to encode audio data {:?}", e);
-                match e.code() {
-                    opus::ErrorCode::BufferTooSmall => {}
-                    _ => return Err(Box::new(e)),
+#[tokio::main]
+async fn main() {
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .expect("No input device available");
+    let config = device.default_input_config().unwrap();
+
+    println!(
+        "Default input device: {} \n config: {:?}",
+        device.name().unwrap_or("Unknown".to_string()),
+        config
+    );
+
+    let (tx, audio_rx) = mpsc::channel::<Vec<u8>>(100000);
+    let (txin, audio_rxin) = std::sync::mpsc::channel::<Vec<f32>>();
+    tokio::spawn(async move {
+        ws::run(audio_rx).await;
+    });
+
+    tokio::spawn(async move {
+        loop {
+            match audio_rxin.recv() {
+                Ok(data) => {
+                    // println!("Received {} samples", data.len());
+                    let data = encode_audio(&data).unwrap();
+                    if let Err(e) = tx.send(data).await {
+                        eprintln!("Failed to receive audio data: {}", e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to receive audio data: {}", e);
                 }
             }
         }
-    }
+    });
 
-    Ok(output)
+    let stream = device
+        .build_input_stream(
+            &config.into(),
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                let data = data.to_vec();
+                let txin = txin.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = txin.send(data) {
+                        eprintln!("Failed to send audio data: {}", e);
+                    }
+                });
+            },
+            move |err| eprintln!("An error occurred on the input stream: {}", err),
+            None,
+        )
+        .unwrap();
+
+    stream.play().unwrap();
+    println!("Streaming audio to");
+    tokio::time::sleep(tokio::time::Duration::from_secs(1000)).await; // Stream for 5 seconds
 }
-
-fn main() {
-    let mut data = [0.0f32; 48000];
-
-    data[0] = 1.0;
-    data[1] = 1.0;
-    data[2] = 1.0;
-    data[3] = 1.0;
-
-    let result = encode_audio(&data);
-
-    println!("{:?}", result);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_encode_audio() {
-        let mut data = [0.0f32; 48000];
-
-        data[0] = 1.0;
-        data[1] = 1.0;
-        data[2] = 1.0;
-        data[3] = 1.0;
-
-        let result = encode_audio(&data);
-        assert!(result.is_ok());
-    }
-}
-

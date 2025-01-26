@@ -41,6 +41,7 @@ async fn main() {
                 .accept()
                 .await
                 .expect("Failed to accept connection");
+            println!("Accepted connection from {:?}", _addr);
             let mut buffer: Vec<u8> = vec![];
             let size = socket
                 .read_to_end(&mut buffer)
