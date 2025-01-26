@@ -1,7 +1,9 @@
 use futures_util::*;
 use rand;
+use rodio::buffer;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::thread::spawn;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, RwLock};
@@ -59,7 +61,6 @@ fn handle_message(server: Arc<SServer>, msg: ServerMessage) {
                         "Sending new message client_id: {}, message: {}",
                         client.id, message
                     );
-                    
                 }
             }
             Err(e) => {
@@ -109,7 +110,7 @@ async fn handle_connection(
     }
     let txc: mpsc::UnboundedSender<ServerMessage> = tx.clone();
 
-    let mut ping_interval = interval(Duration::from_secs(1));
+    // let mut ping_interval = interval(Duration::from_secs(1));
     let mut incoming = incoming.map_err(|e| {
         println!("Error {}", e);
         // txc.send(ServerMessage::RemoveClient(client_id)).unwrap();
@@ -121,7 +122,7 @@ async fn handle_connection(
                     message = message_rx.recv() =>{
                         match  message {
                                 Some(msg) => {
-                                    let _ = outgoing.send(Message::Binary(msg.into())).await;
+                                    let _ = outgoing.send(Message::Binary(msg.clone().into())).await;
                                 },
                                 None => println!("None"),
                             }
@@ -144,9 +145,9 @@ async fn handle_connection(
                 }
             }
         }
-                    _ = ping_interval.tick() => {
-                           // txc.send(ServerMessage::Message(client_id, String::from("Ping"))).unwrap();
-                    }
+                    // _ = ping_interval.tick() => {
+                    //        // txc.send(ServerMessage::Message(client_id, String::from("Ping"))).unwrap();
+                    // }
                 }
     }
 }
@@ -155,7 +156,7 @@ fn process_header(req: &Request, res: Response) -> Result<Response, ErrorRespons
     Ok(res)
 }
 
-pub async fn run(mut audio_rx: mpsc::Receiver<Vec<u8>>) {
+pub async fn run(mut audio_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let txc = tx.clone();
     let server = Arc::new(SServer {
@@ -164,17 +165,19 @@ pub async fn run(mut audio_rx: mpsc::Receiver<Vec<u8>>) {
     });
     let message_handler_server = server.clone();
 
-    tokio::spawn(async move {
+    std::thread::spawn(move || {
         loop {
-            match audio_rx.recv().await {
-                Some(data) => {
-                    println!("Received {} samples", data.len());
+            match audio_rx.recv() {
+                Ok(data) => {
+                    // println!("Received {} samples", data.len());
+                    let data = data;
+                    // println!("Encoded {} bytes : 22", data.len());
                     if let Err(e) = txc.send(ServerMessage::Broadcast(data)) {
-                        eprintln!("Failed to broadcast audio data: {}", e);
+                        eprintln!("Failed to receive audio data: {}", e);
                     }
                 }
-                None => {
-                    eprintln!("Failed to receive audio data");
+                Err(e) => {
+                    eprintln!("Failed to receive audio data: {}", e);
                 }
             }
         }

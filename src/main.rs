@@ -25,7 +25,7 @@ async fn main() {
         config
     );
 
-    let (tx, audio_rx) = mpsc::channel::<Vec<u8>>(100000);
+    let (tx, audio_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let (txin, audio_rxin) = std::sync::mpsc::channel::<Vec<f32>>();
     tokio::spawn(async move {
         ws::run(audio_rx).await;
@@ -37,7 +37,8 @@ async fn main() {
                 Ok(data) => {
                     // println!("Received {} samples", data.len());
                     let data = encode_audio(&data).unwrap();
-                    if let Err(e) = tx.send(data).await {
+                    // println!("Encoded {} bytes : 22", data.len());
+                    if let Err(e) = tx.send(data) {
                         eprintln!("Failed to receive audio data: {}", e);
                     }
                 }
@@ -55,6 +56,7 @@ async fn main() {
                 let data = data.to_vec();
                 let txin = txin.clone();
                 std::thread::spawn(move || {
+                    // println!("Received {} samples 11", data.len());
                     if let Err(e) = txin.send(data) {
                         eprintln!("Failed to send audio data: {}", e);
                     }
