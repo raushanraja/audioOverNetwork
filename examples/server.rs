@@ -1,6 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::Arc;
-use tokio::net::UdpSocket;
+use tokio::{io::AsyncWriteExt, net::TcpStream, sync::mpsc};
 
 fn encode_audio(data: &[f32]) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let sample_rate = 48000;
@@ -68,37 +68,46 @@ async fn main() {
         device.name().unwrap_or("Unknown".to_string())
     );
 
-    let socket = Arc::new(UdpSocket::bind("0.0.0.0:12345").await.expect("Failed to bind socket"));
-    let target_address = "192.168.0.114:12346"; // Replace with the receiver's address
+    let target_address = "192.168.0.163:12346"; // Replace with the receiver's address
 
-    let socket = Arc::clone(&socket);
+    let (tx, mut rx) = std::sync::mpsc::channel::<Vec<f32>>();
+
+    tokio::spawn(async move {
+        while let Ok(data) = rx.recv() {
+            println!("sending {} samples", data.len());
+            match encode_audio(&data) {
+                Ok(encoded) => {
+                    match TcpStream::connect(&target_address).await {
+                        Ok(mut stream) => {
+                            if let Err(e) = stream.write_all(&encoded).await {
+                                eprintln!("Failed to send data: {:?}", e);
+                            } else {
+                                println!("Sent {} bytes to {}", encoded.len(), target_address);
+                            }
+                        }
+                        Err(e) => eprintln!("Failed to connect to {}: {:?}", target_address, e),
+                    }
+                }
+                Err(e) => eprintln!("Failed to encode audio data {:?}", e),
+            }
+        }
+    });
+
     let stream = device
         .build_input_stream(
             &config.into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let socket = Arc::clone(&socket);
-                let data = data.to_vec(); // Copy data into a Vec
-                tokio::spawn(async move {
-                    match encode_audio(&data) {
-                        Ok(result) => {
-                            socket
-                                .send_to(&result, target_address)
-                                .await
-                                .expect("Failed to send data");
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to encode audio data {:?}", e);
-                        }
-                    }
-                });
+                let data = data.to_vec();
+                if let Err(e) = tx.send(data) {
+                    eprintln!("Failed to send data to channel: {:?}", e);
+                }
             },
-            move |err| eprintln!("Stream error: {}", err),
+            move |err| eprintln!("An error occurred on the input stream: {}", err),
             None,
         )
         .unwrap();
 
     stream.play().unwrap();
-
     println!("Streaming audio to {}", target_address);
     tokio::time::sleep(tokio::time::Duration::from_secs(60)).await; // Stream for 60 seconds
 }

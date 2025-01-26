@@ -1,6 +1,7 @@
 use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
-use tokio::net::UdpSocket;
+use tokio::net::TcpListener;
+use tokio::io::AsyncReadExt;
 
 fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let sample_rate = 48000;
@@ -32,16 +33,17 @@ fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() {
-    let socket = UdpSocket::bind("0.0.0.0:12346").await.expect("Failed to bind socket");
+    let listener = TcpListener::bind("0.0.0.0:12346").await.expect("Failed to bind socket");
     let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
     let sink = Sink::try_new(&stream_handle).unwrap();
 
     println!("Receiving audio...");
 
-    let mut buffer = [0u8; 65536]; // Increase buffer size
-
     loop {
-        let (size, _src) = socket.recv_from(&mut buffer).await.expect("Failed to receive data");
+        let (mut socket, _addr) = listener.accept().await.expect("Failed to accept connection");
+        let mut buffer = vec![0u8; 65536]; // Increase buffer size
+
+        let size = socket.read(&mut buffer).await.expect("Failed to read data");
 
         let samples = match decode_audio(&buffer[..size]) {
             Ok(samples) => samples,
