@@ -1,6 +1,7 @@
 use anyhow::Result;
 use cpal::traits::{HostTrait, StreamTrait};
 use futures_util::{SinkExt, StreamExt};
+use ringbuf::{producer, storage::Heap, traits::{Consumer, Producer, Split}, wrap::caching::Caching, SharedRb};
 use rodio::DeviceTrait;
 use std::sync::Arc;
 use tokio::sync::{
@@ -18,6 +19,7 @@ pub struct WebSocketClient {
     url: String,
     tx: Sender<WSMessage>,
     rx: Arc<Mutex<Receiver<WSMessage>>>,
+    producer: Arc<Mutex<Caching<Arc<SharedRb<Heap<f32>>>, true, false>>>
 }
 
 pub trait Client {
@@ -26,11 +28,14 @@ pub trait Client {
 }
 
 impl WebSocketClient {
-    pub fn new(url: String, tx: Sender<WSMessage>, rx: Arc<Mutex<Receiver<WSMessage>>>) -> Self {
-        WebSocketClient { url, tx, rx }
+    pub fn new(url: String, tx: Sender<WSMessage>, rx: Arc<Mutex<Receiver<WSMessage>>> ,
+    producer: Caching<Arc<SharedRb<Heap<f32>>>, true, false> 
+         
+    ) -> Self {
+        WebSocketClient { url, tx, rx, producer: Arc::new(Mutex::new(producer)) }
     }
 
-    async fn try_connect(&self) -> Result<(), anyhow::Error> {
+    async fn try_connect(&self, ) -> Result<(), anyhow::Error> {
         let (ws_stream, _) = connect_async(&self.url).await?;
         let (mut sink, mut stream) = ws_stream.split();
         let rx = self.rx.clone();
@@ -47,12 +52,17 @@ impl WebSocketClient {
         });
 
         let tx = self.tx.clone();
+        let producer = self.producer.clone();
         tokio::spawn(async move {
             while let Some(msg) = stream.next().await {
                 let msg = msg.expect("Failed to receive message");
                 let msg = tungstenite::Message::Binary(msg.into_data());
                 let msg: Vec<u8> = msg.into_data().to_vec();
-                crate::decode_audio(&msg).expect("Failed to decode audio data");
+                if let Ok(samples) = crate::decode_audio(&msg) {
+                    for sample in samples {
+                        producer.lock().await.try_push(sample);
+                    }
+                }
                 tx.send(WSMessage { message: msg })
                     .await
                     .expect("Failed to send message");
@@ -116,7 +126,7 @@ impl Client for WebSocketClient {
     }
 }
 
-fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error + Send + Sync>> {
     let mut output = Vec::new();
     let mut bytes = [0u8; 4];
     for i in 0..(data.len() / 4) {
@@ -129,20 +139,22 @@ fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() {
+    let rb = ringbuf::SharedRb::new(1000000);
+    let (producer, mut consumer) = rb.split();
+
     let (tx_in, mut rx_in) = tokio::sync::mpsc::channel::<WSMessage>(100);
     let (_tx_out, rx_out) = tokio::sync::mpsc::channel::<WSMessage>(100);
     let url = "ws://localhost:8080";
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<f32>>();
 
     tokio::spawn(async move {
-        let ws_client = WebSocketClient::new(url.to_string(), tx_in, Arc::new(Mutex::new(rx_out)));
+        let ws_client = WebSocketClient::new(url.to_string(), tx_in, Arc::new(Mutex::new(rx_out)), producer);
         ws_client.connect().await.unwrap();
     });
 
     let host = cpal::default_host();
     let device = host
-        .default_input_device()
-        .expect("No input device available");
+        .default_output_device()
+        .expect("No output device available");
     let config = device.default_output_config().unwrap();
 
     println!(
@@ -153,27 +165,16 @@ async fn main() {
 
     println!("Receiving audio...");
 
-    tokio::spawn(async move {
-        while let Some(msg) = rx_in.recv().await {
-            println!("Received message: {:?}", msg.message);
-            if let Ok(samples) = decode_audio(&msg.message) {
-                println!("Received {} samples", samples.len());
-                tx.send(samples).unwrap();
-            }
-        }
-    });
-
     let stream = device
         .build_output_stream(
             &config.clone().into(),
             move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let data = match rx.try_recv() {
-                    Ok(data) => data,
-                    Err(_) => return,
-                };
-                println!("Playing {} samples", data.len());
-                for (output_sample, input_sample) in output.iter_mut().zip(data.iter()) {
-                    *output_sample = *input_sample;
+                for output_sample in output.iter_mut() {
+                    if let Some(sample) = consumer.try_pop() {
+                        *output_sample = sample;
+                    } else {
+                        *output_sample = 0.0; // Fill with silence if no data is available
+                    }
                 }
             },
             move |err| eprintln!("An error occurred on the output stream: {}", err),
