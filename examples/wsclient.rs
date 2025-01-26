@@ -1,8 +1,8 @@
 use anyhow::Result;
 use cpal::traits::{HostTrait, StreamTrait};
+use ringbuf::traits::{Producer,  Split, Consumer};
 use rodio::DeviceTrait;
 use std::net::UdpSocket;
-use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 
 fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
@@ -18,16 +18,22 @@ fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() {
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<f32>>();
+    let rb = ringbuf::SharedRb::new(1000000);
+    let (mut producer, mut consumer) = rb.split();
+
     let socket = UdpSocket::bind("0.0.0.0:8080").expect("Couldn't bind to address");
 
     thread::spawn(move || {
-        let mut buf = [0; 4096];
+        let mut buf = [0; 100000];
         loop {
             match socket.recv(&mut buf) {
                 Ok(received) => {
                     if let Ok(samples) = decode_audio(&buf[..received]) {
-                        tx.send(samples).unwrap();
+                        for sample in samples {
+                            if producer.try_push(sample).is_err() {
+                                eprintln!("Failed to push audio data to ring buffer");
+                            }
+                        }
                     }
                 }
                 Err(e) => eprintln!("Failed to receive audio data: {}", e),
@@ -53,12 +59,12 @@ async fn main() {
         .build_output_stream(
             &config.clone().into(),
             move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let data = match rx.try_recv() {
-                    Ok(data) => data,
-                    Err(_) => return,
-                };
-                for (output_sample, input_sample) in output.iter_mut().zip(data.iter()) {
-                    *output_sample = *input_sample;
+                for output_sample in output.iter_mut() {
+                    if let Some(sample) = consumer.try_pop() {
+                        *output_sample = sample;
+                    } else {
+                        *output_sample = 0.0; // Fill with silence if no data is available
+                    }
                 }
             },
             move |err| eprintln!("An error occurred on the output stream: {}", err),
