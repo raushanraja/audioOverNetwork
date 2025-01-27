@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Audio</title>
+</head>
+
+<body>
+    <h1>WebSocket Audio</h1>
+    <p>Check the console for audio playback.</p>
+    <script>
+
+        let started = false;
+        const ringBuffer = [];
+        const bufferSize = 10000; // Adjust the buffer size as needed
+
+        function decodeAudio(data) {
+            const output = [];
+            const dataView = new DataView(data);  // Use DataView for byte-level access
+            const numSamples = data.byteLength / 4;  // Each sample is 4 bytes (32-bit float)
+            for (let i = 0; i < numSamples; i++) {
+                const sample = dataView.getFloat32(i * 4, true); // true = little-endian
+                output.push(sample);
+            }
+
+            return output;
+        }
+
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const socket = new WebSocket('ws://192.168.0.107:8080');
+        socket.binaryType = 'arrayBuffer';
+        socket.onopen = () => {
+            console.log('WebSocket connection established');
+        };
+
+        socket.onmessage = async (event) => {
+            let arrayBuffer = await new Response(event.data).arrayBuffer();
+            if (ringBuffer.length >= bufferSize) {
+                ringBuffer.shift(); // Remove the oldest buffer if the ring buffer is full
+            }
+            ringBuffer.push(arrayBuffer);
+        };
+
+        function processQueue() {
+            if (ringBuffer.length === 0) {
+                console.log('No audio data to process', ringBuffer.length, audioContext.state);
+                return;
+            }
+
+            const arrayBuffer = ringBuffer.shift();
+            const sampleRate = 44100;
+            const numChannels = 2;
+            const length = arrayBuffer.byteLength / 4 / numChannels;
+            const audioBuffer = audioContext.createBuffer(numChannels, length, sampleRate);
+            const pcmData = decodeAudio(arrayBuffer);
+
+            for (let channel = 0; channel < numChannels; channel++) {
+                const channelData = audioBuffer.getChannelData(channel);
+                for (let i = 0; i < length; i++) {
+                    channelData[i] = pcmData[i * numChannels + channel];
+                }
+            }
+
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+            source.start();
+            source.onended = processQueue;
+        }
+
+        socket.onerror = (error) => {
+            console.error('WebSocket error', error);
+        };
+
+        setTimeout(() => {
+            processQueue();
+        }, 5000);
+
+        socket.onclose = () => {
+            console.log('WebSocket connection closed');
+        };
+    </script>
+</body>
+
+</html>

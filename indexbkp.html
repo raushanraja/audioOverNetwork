@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Audio</title>
+</head>
+
+<body>
+    <h1>WebSocket Audio</h1>
+    <p>Check the console for audio playback.</p>
+    <script>
+
+
+        function decodeAudio(data) {
+            const output = [];
+            const dataView = new DataView(data.buffer);  // Use DataView for byte-level access
+            const numSamples = data.byteLength / 4;  // Each sample is 4 bytes (32-bit float)
+
+            for (let i = 0; i < numSamples; i++) {
+                // Read a 32-bit float (little-endian)
+                const sample = dataView.getFloat32(i * 4, true); // true = little-endian
+                output.push(sample);
+            }
+
+            return output;
+        }
+
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const socket = new WebSocket('ws://192.168.0.107:8080');
+        socket.binaryType = 'arrayBuffer';
+        socket.onopen = () => {
+            console.log('WebSocket connection established');
+        };
+
+        let x = 0;
+        socket.onmessage = async (event) => {
+            let arrayBuffer = new Int32Array(await new Response(event.data).arrayBuffer());
+
+            // PCM parameters (you need to know these values for your PCM data)
+            const sampleRate = 44100; // Sample rate (e.g., 44100 Hz)
+            const numChannels = 2;    // Number of channels (e.g., stereo = 2)
+            const length = arrayBuffer.byteLength / 4 / numChannels; // PCM data is 32-bit (4 bytes per sample)
+
+            // Create an AudioBuffer with the given parameters
+            const audioBuffer = audioContext.createBuffer(numChannels, length, sampleRate);
+
+            // Get the PCM data as an array of floats (range between -1.0 to 1.0)
+            const pcmData = arrayBuffer;
+
+            // // Loop through each channel and set the PCM data
+            // for (let channel = 0; channel < numChannels; channel++) {
+            //     const channelData = audioBuffer.getChannelData(channel);
+
+            //     // Copy the PCM data to the AudioBuffer channel data (convert 16-bit PCM to float)
+            //     for (let i = 0; i < length; i++) {
+            //         channelData[i] = pcmData[i * numChannels + channel]; // 16-bit PCM to float (-1 to 1)
+            //     }
+            // }
+
+            // Create a source node and connect it to the audio context's destination (speakers)
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+            source.start();
+
+        }
+
+
+        socket.onerror = (error) => {
+            console.error('WebSocket error', error);
+        };
+
+        socket.onclose = () => {
+            console.log('WebSocket connection closed');
+        };
+    </script>
+</body>
+
+</html>

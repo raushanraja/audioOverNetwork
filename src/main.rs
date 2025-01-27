@@ -1,6 +1,5 @@
 use aprocess::ws;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use tokio::sync::mpsc;
 
 fn encode_audio(data: &[f32]) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let mut encoded = Vec::new();
