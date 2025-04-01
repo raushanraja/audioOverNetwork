@@ -1,17 +1,17 @@
+use opus::{Channels, Decoder};
 use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
 use tokio::net::UdpSocket;
 
 fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let sample_rate = 48000;
-    let channels = opus::Channels::Stereo;
-    let mut decoder = opus::Decoder::new(sample_rate, channels)?;
+    let channels = Channels::Stereo;
+    let mut decoder = Decoder::new(sample_rate, channels)?;
 
     let mut output = Vec::new();
+    let frame_size = (sample_rate as i32 / 1000 * 20) as usize;
+
     let mut input_i = 0;
-
-    let frame_size = (sample_rate as i32 / 1000 * 10) as usize; // Adjust frame size to 10ms
-
     while input_i < data.len() {
         let packet = &data[input_i..];
         let mut decoded = vec![0f32; frame_size * channels as usize];
@@ -21,7 +21,7 @@ fn decode_audio(data: &[u8]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
                 input_i += packet.len();
             }
             Err(e) => {
-                eprintln!("Failed to decode audio data {:?}", e);
+                eprintln!("Failed to decode audio data: {:?}", e);
                 return Err(Box::new(e));
             }
         }
